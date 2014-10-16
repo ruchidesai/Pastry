@@ -26,7 +26,7 @@ object Pastry {
   sealed trait Message
   case class BuildNetwork(num_nodes: Int) extends Message
   case class Route(source: String, destination: String) extends Message
-  case object TakeThis extends Message
+  case class HashMap(hashmap: Map[String, Int]) extends Message
   
   class Master extends Actor {
     def receive = {
@@ -34,12 +34,12 @@ object Pastry {
         var seed = 5
         var w = seed.toString
         var list = ListBuffer[String]()
-        var list1 = ListBuffer[String]()
+        //var list1 = ListBuffer[String]()
         var actorList = List[ActorRef]()
         var counter = 0
 	
         //generating node ids (hashes)
-        while(counter< num_nodes) {
+        while(counter < num_nodes) {
 	      var hash = hex_Digest(w)
 	      list += hash
 	      actorList::=(context.actorOf(Props[PastryNode], name=hash))
@@ -49,30 +49,35 @@ object Pastry {
 	    }
 	
 	    //proximity metric = index after sorting
-	    list1=list.sorted
-	    var sortedarr:Array[String]= list1.toArray
+	    //list1=list.sorted
+	    //var sortedarr:Array[String]= (list.sorted).toArray
+	    val hashmap = ((list.sorted).toArray).view.zipWithIndex.toMap
+	    for(actor <- actorList)
+	      actor ! HashMap(hashmap)
 	    
-	    context.actorSelection(list1(0)) ! Route("source", list1(3)) 
+	    //context.actorSelection(list(0)) ! Route("source", list(3)) 
     }
   }
   
   class PastryNode extends Actor {
     val node_id = self.path.name
     def receive = {
-      case Route(source, destination) =>
-        if(in_leaf_set(destination))
+      /*case Route(source, destination) =>
+        if(self.path.name == destination)
+          println("Message Received")
+        else if(in_leaf_set(destination))
+          //fwd message to node L(i) such that |L(i) - D| is minimum
           println("In leaf set")
         else {
           println("In routing table")
           route_by_routing_table(destination)
         }
-        println("Sending message")
-        context.actorSelection("../"+destination) ! TakeThis
-      case `TakeThis` =>
-        println("Message received")
+      */  
+      case HashMap(hashmap) =>
+        println(self.path.name + "Received hashmap")
     }
     
-    def in_leaf_set(destination: String): Boolean = {
+    /*def in_leaf_set(destination: String): Boolean = {
       val current_index = indexOf(self.path.name, hashmap)
       var index = current_index - 1
       var i = 0
@@ -99,9 +104,9 @@ object Pastry {
         }
       }
       return false  
-    }
+    }*/
     
-    def route_by_routing_table(destination: String) {
+    /*def route_by_routing_table(destination: String) {
       var prefix = common(self.path.name, destination)
       var length_of_prefix = prefix.length
       var next_node = node_with_closest_prefix(length_of_prefix, destination)
@@ -109,14 +114,14 @@ object Pastry {
         route_by_neighborhood_set(destination, length_of_prefix)
       else
         context.actorSelection("../"+next_node) ! TakeThis
-    }
+    }*/
     
-    def route_by_neighborhood_set(destination: String, length_of_prefix: Int) {
+    /*def route_by_neighborhood_set(destination: String, length_of_prefix: Int) {
       val length = length_of_prefix
       //find a node id such that common(nodeid, destination).length = length_of_prefix
       //fwd message to that node
       //if such a node is not found, increment length by 1
-    }
+    }*/
   }  
   
   //generates sha-1 hash
