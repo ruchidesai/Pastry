@@ -25,7 +25,7 @@ object Pastry {
   
   sealed trait Message
   case class BuildNetwork(num_nodes: Int) extends Message
-  case class Route(key: String) extends Message
+  case class Route(key: String, hop: Int) extends Message
   case class Data(hashmap: Map[ActorRef, Int], list: List[ActorRef]) extends Message
   case object GotIt extends Message
   
@@ -36,6 +36,7 @@ object Pastry {
         var w = seed.toString
         var actorList = List[ActorRef]()
         var counter = 0
+        var hop = 0
 	
         //generating node ids
         while(counter < num_nodes) {
@@ -50,7 +51,7 @@ object Pastry {
 	    val hashmap = (actorList.toArray).view.zipWithIndex.toMap
 	    for(actor <- actorList)
 	      actor ! Data(hashmap, actorList.sorted)
-	    actorList.head ! Route(actorList.last.path.name)
+	    actorList.head ! Route(actorList.last.path.name, hop)
 	      
       case `GotIt` =>
         println("Shutting system down...")
@@ -83,7 +84,7 @@ object Pastry {
         initialize_neighborhood_set()
         initialize_leaf_sets()
         
-      case Route(key) =>
+      case Route(key, hop) =>
         
         //if the current node happens to be the destination
         if(self.path.name == key) {
@@ -104,7 +105,7 @@ object Pastry {
             }              
           }
           //fwd message to destination
-          destination ! Route(key)
+          destination ! Route(key, (hop + 1))
         }
         
         //check if current node lies in the larger leaf set
@@ -119,7 +120,7 @@ object Pastry {
             }              
           }
           //fwd message to destination
-          destination ! Route(key)
+          destination ! Route(key, (hop + 1))
         }
         
         //check in routing table
@@ -128,7 +129,7 @@ object Pastry {
           var col = column_of(row, key)
           
           if (my_routing_table(row).length > col)
-            my_routing_table(row)(col) ! Route(key)
+            my_routing_table(row)(col) ! Route(key, (hop + 1))
           
           //route to a node in L U R U M having a matching prefix with key at least as long as that of the current node
           //&
@@ -157,7 +158,7 @@ object Pastry {
                 }
               }
             }
-            destination ! Route(key)
+            destination ! Route(key, (hop + 1))
           }
         }
     }
