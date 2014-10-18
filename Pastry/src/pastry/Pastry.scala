@@ -8,7 +8,7 @@ import scala.collection.mutable.ArrayBuffer
 
 object Pastry {
   
-  private val sha = MessageDigest.getInstance("SHA-1")
+  private val sha = MessageDigest.getInstance("MD5")
   
   def main(args: Array[String]){
     if ( args.isEmpty || args.length < 1) {
@@ -25,37 +25,36 @@ object Pastry {
   
   sealed trait Message
   case class BuildNetwork(num_nodes: Int) extends Message
-  case class Route(source: String, destination: String) extends Message
-  case class Data(hashmap: Map[String, Int], list: List[String]) extends Message
+  case class Route(key: String) extends Message
+  case class Data(hashmap: Map[ActorRef, Int], list: List[ActorRef]) extends Message
+  case object GotIt extends Message
   
   class Master extends Actor {
     def receive = {
       case BuildNetwork(num_nodes) =>
-        var seed = 5
+        var seed = 1
         var w = seed.toString
-        var list = List[String]()
-        //var list1 = ListBuffer[String]()
         var actorList = List[ActorRef]()
         var counter = 0
 	
-        //generating node ids (hashes)
+        //generating node ids
         while(counter < num_nodes) {
 	      var hash = hex_Digest(w)
-	      list ::= hash
 	      actorList::=(context.actorOf(Props(new PastryNode(num_nodes)), name=hash))
 	      seed +=1
 	      counter +=1	
 	      w = seed.toString					  
 	    }
 	
-	    //proximity metric = index after sorting
-	    //list1=list.sorted
-	    //var sortedarr:Array[String]= (list.sorted).toArray
-	    val hashmap = ((list.sorted).toArray).view.zipWithIndex.toMap
+	    //array index serves as proximity metric
+	    val hashmap = (actorList.toArray).view.zipWithIndex.toMap
 	    for(actor <- actorList)
-	      actor ! Data(hashmap, list)
-	    
-	    //context.actorSelection(list(0)) ! Route("source", list(3)) 
+	      actor ! Data(hashmap, actorList.sorted)
+	    actorList.head ! Route(actorList.last.path.name)
+	      
+      case `GotIt` =>
+        println("Shutting system down...")
+        context.system.shutdown
     }
   }
   
@@ -63,98 +62,169 @@ object Pastry {
     
     val node_id = self.path.name
     
-    var my_hashmap = Map[String, Int]()
-    var my_list = List[String]()
+    var my_hashmap = Map[ActorRef, Int]()
     var my_num_nodes = num_nodes
+    var my_list = List[ActorRef]()
     
-    var my_leaf_set = List[String]()
-    
-    val row = (scala.math.log(num_nodes)/scala.math.log(16)).ceil.toInt
-    val col = 15
-    //var my_routing_table = Array.ofDim[String](row, col)
-    var my_routing_table = Array[List[String]]()
+    var my_smaller_leaf_set = List[ActorRef]()
+    var my_larger_leaf_set = List[ActorRef]()
+    var my_neighborhood_set = List[ActorRef]()
+    var my_routing_table = Array.ofDim[ListBuffer[ActorRef]](4)
     
     def receive = {
+      
       case Data(hashmap, list) =>
+        
         my_hashmap = hashmap
-        my_list = list
         my_num_nodes = num_nodes
+        my_list = list
+        
         initialize_routing_table()
-      /*case Route(source, destination) =>
-        if(self.path.name == destination)
+        initialize_neighborhood_set()
+        initialize_leaf_sets()
+        
+      case Route(key) =>
+        
+        //if the current node happens to be the destination
+        if(self.path.name == key) {
           println("Message Received")
-        else if(in_leaf_set(destination))
-          //fwd message to node L(i) such that |L(i) - D| is minimum
-          println("In leaf set")
-        else {
-          println("In routing table")
-          route_by_routing_table(destination)
+          context.actorSelection("../") ! GotIt
+          //send acknowledgement 
+        }          
+          
+        //check if current node lies in the smaller leaf set
+        else if(in_my_smaller_leaf_set(key)) {
+          var max_common_prefix_length = ((key).zip(self.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
+          var destination = self
+          for(node <- my_smaller_leaf_set) {
+            var cpl = ((key).zip(node.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
+            if (cpl > max_common_prefix_length) {
+              max_common_prefix_length = cpl
+              destination = node
+            }              
+          }
+          //fwd message to destination
+          destination ! Route(key)
         }
-      */
+        
+        //check if current node lies in the larger leaf set
+        else if(in_my_larger_leaf_set(key)) {
+          var max_common_prefix_length = ((key).zip(self.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
+          var destination = self
+          for(node <- my_larger_leaf_set) {
+            var cpl = ((key).zip(node.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
+            if (cpl >= max_common_prefix_length) {
+              max_common_prefix_length = cpl
+              destination = node
+            }              
+          }
+          //fwd message to destination
+          destination ! Route(key)
+        }
+        
+        //check in routing table
+        else {
+          var row = ((key).zip(self.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
+          var col = column_of(row, key)
+          
+          if (my_routing_table(row).length > col)
+            my_routing_table(row)(col) ! Route(key)
+          
+          //route to a node in L U R U M having a matching prefix with key at least as long as that of the current node
+          //&
+          //that is closer to key than the current node by proximity metric
+          else {
+            var union_list = my_smaller_leaf_set.union(my_larger_leaf_set.union(my_neighborhood_set))
+            var T_list = union_list.filter(n => (((key).zip(n.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length >= row))
+            var destination = self
+            var min_difference = (key.compare(self.path.name)).abs
+            println(min_difference)
+            if (T_list.length > 0) {             
+              for(T <- T_list) {
+                if (key.compare(T.path.name) < min_difference) {
+                  min_difference = (key.compare(T.path.name)).abs
+                  destination = T
+                }
+              }
+            }
+            else {
+              for(list <- my_routing_table) {
+                for(node <- list) {
+                  if (key.compare(node.path.name) < min_difference) {
+                    min_difference = (key.compare(node.path.name)).abs
+                    destination = node
+                  }
+                }
+              }
+            }
+            destination ! Route(key)
+          }
+        }
     }
     
     def initialize_routing_table() {
-      for(node <- my_list) {
-        if(node != self.path.name) {
-          var common_prefix = node.zip(self.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString
-          println("common_prefix.length = " + common_prefix.length)
-          my_routing_table(common_prefix.length)::=node
-        }        
+      var my_index = my_list.indexOf(self)
+      for (i <- 0 until my_routing_table.length)
+        my_routing_table(i) = ListBuffer[ActorRef]()
+      for (i <- (my_index + 1) until my_list.length) {
+        var node = my_list(i)
+        var common_prefix = (node.path.name).zip(self.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString
+        if (my_routing_table(common_prefix.length).length < 15)
+          my_routing_table(common_prefix.length) += node
       }
-      println("Node " + self.path.name + "\'s routing table:")
-      println(my_routing_table)
     }
     
-    /*def in_leaf_set(destination: String): Boolean = {
-      val current_index = my_hashmap(self.path.name)
-      var index = current_index - 1
-      var i = 0
-      while (i < 8) {
-        if(destination == my_list.lift(index))
-          return true       
-        else {
-          index-=1
-          i+=1
-          if(index < 0)
-            index+=my_num_nodes
-        }
-      }
-      index = current_index + 1
-      i = 0
-      while (i < 8) {
-        if(destination == my_list.lift(index))
-          return true
-        else {
-          index+=1
-          i+=1
-          if(index >= my_num_nodes)
-            index%=my_num_nodes
-        }
-      }
-      return false  
+    def initialize_neighborhood_set() {
+      var index = my_hashmap(self)
+      my_neighborhood_set = ((my_hashmap.filterKeys(n => ((my_hashmap(n) <= ((index + 16) % my_num_nodes)) && (my_hashmap(n) > (index % my_num_nodes))) || ((my_hashmap(n) >= ((index - 16) % my_num_nodes)) && (my_hashmap(n) < (index % my_num_nodes))))).keys).toList
     }
     
-    def route_by_routing_table(destination: String) {
-      //var prefix = common(self.path.name, destination)
-      var prefix = destination.zip(self.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString
-      var length_of_prefix = prefix.length
-      var next_node = node_with_closest_prefix(length_of_prefix, destination)
-      if(next_node == null)
-        route_by_neighborhood_set(destination, length_of_prefix)
+    def initialize_leaf_sets() {
+      var index = my_list.indexOf(self)
+      //my_smaller_leaf_set = my_list.filter(n => (((my_list.indexOf(n) % my_num_nodes) >= ((index - 8) % my_num_nodes)) && ((my_list.indexOf(n) % my_num_nodes) < (index % my_num_nodes))))
+      my_smaller_leaf_set = my_list.filter(n =>(((my_list.indexOf(n) > index) && (my_list.indexOf(n) >= (index - 8 + my_num_nodes))) || ((my_list.indexOf(n) < index) && (my_list.indexOf(n) >= (index - 8)))))
+      my_larger_leaf_set = my_list.filter(n => (((my_list.indexOf(n) > index) && (my_list.indexOf(n) <= (index + 8))) || ((my_list.indexOf(n) < index) && ((my_list.indexOf(n) + my_num_nodes) <= (index + 8)))))
+    }
+    
+    def in_my_smaller_leaf_set(key: String): Boolean = {
+      var min: String = (my_smaller_leaf_set.head).path.name
+      var max: String = (my_smaller_leaf_set.last).path.name
+      if (min <= key && key <= max)
+        true
       else
-        context.actorSelection("../"+next_node) ! TakeThis
+        false  
     }
     
-    def route_by_neighborhood_set(destination: String, length_of_prefix: Int) {
-      val length = length_of_prefix
-      //find a node id such that common(nodeid, destination).length = length_of_prefix
-      //fwd message to that node
-      //if such a node is not found, increment length by 1
-    }*/
+    def in_my_larger_leaf_set(key: String): Boolean = {
+      var min: String = (my_larger_leaf_set.head).path.name
+      var max: String = (my_larger_leaf_set.last).path.name
+      if (min <= key && key <= max)
+        true
+      else
+        false  
+    }
+    
+    def column_of(index: Int, key: String): Int = {
+      var digit = key.charAt(index)
+      digit match {
+        case 'a' => 10
+        case 'b' => 11
+        case 'c' => 12
+        case 'd' => 13
+        case 'e' => 14
+        case 'f' => 15
+        case _ => digit.toInt
+      }
+    }
   }  
   
   //generates sha-1 hash
   def hex_Digest(s:String):String = {
 	sha.digest(s.getBytes("UTF-8")).map("%02x".format(_)).mkString
   }
+  def randomString(alphabet: String)(n: Int): String = {
+    val random = new scala.util.Random
+    Stream.continually(random.nextInt(alphabet.size)).map(alphabet).take(n).mkString
+  }
+  
 }
