@@ -12,20 +12,21 @@ object Pastry3 {
   private val sha = MessageDigest.getInstance("MD5")
   
   def main(args: Array[String]){
-    if ( args.isEmpty || args.length < 1) {
-      println("usage: scala project2.scala <NumNodes> ")
+    if ( args.isEmpty || args.length < 2) {
+      println("usage: scala project2.scala <number of nodes> <number of requests>")
 	  return
 	}
 	val num_nodes = args(0).toInt
+	val num_requests = args(1).toInt
 	
 	//create AKKA actor system
 	val system = ActorSystem("PastrySystem")
 	val master = system.actorOf(Props[Master], name="master")
-	master ! BuildNetwork(num_nodes)
+	master ! BuildNetwork(num_nodes, num_requests)
   }
   
   sealed trait Message
-  case class BuildNetwork(num_nodes: Int) extends Message
+  case class BuildNetwork(num_nodes: Int, num_requests: Int) extends Message
   case class Route(key: String, hop: Int) extends Message
   case class Data(proximity_list: List[ActorRef], list: List[ActorRef]) extends Message
   case class GotIt(hop: Int) extends Message
@@ -35,12 +36,14 @@ object Pastry3 {
   class Master extends Actor {
     var total_hops = 0
     var my_num_nodes = 0
+    var my_num_requests = 0
     var init_done_counter = 0
     var request_counter = 0
     var actorList = List[ActorRef]()
     def receive = {
-      case BuildNetwork(num_nodes) =>
+      case BuildNetwork(num_nodes, num_requests) =>
         my_num_nodes = num_nodes
+        my_num_requests = num_requests
         var seed = 1
         var w = seed.toString        
         var counter = 0
@@ -48,7 +51,7 @@ object Pastry3 {
         //generating node ids
         while(counter < num_nodes) {
 	      var hash = hex_Digest(w)
-	      actorList::=(context.actorOf(Props(new PastryNode(num_nodes)), name=hash))
+	      actorList::=(context.actorOf(Props(new PastryNode(num_nodes, num_requests)), name=hash))
 	      seed +=1
 	      counter +=1	
 	      w = seed.toString					  
@@ -69,8 +72,8 @@ object Pastry3 {
       case GotIt(h) =>
         request_counter += 1
         total_hops += h
-        if (request_counter >= my_num_nodes) {
-          var avg_hop = total_hops.toDouble/my_num_nodes
+        if (request_counter >= (my_num_nodes * my_num_requests)) {
+          var avg_hop = total_hops.toDouble / (my_num_nodes * my_num_requests)
           println("Total no of hops = " + total_hops)
           println("Total no of requests = " + request_counter)
           println("Average no of hops = " + avg_hop)
@@ -80,11 +83,12 @@ object Pastry3 {
     }
   }
   
-  class PastryNode(num_nodes: Int) extends Actor {
+  class PastryNode(num_nodes: Int, num_requests: Int) extends Actor {
     
     val node_id = self.path.name    
     
     var my_num_nodes = num_nodes
+    var my_num_requests = num_requests
     var my_list = List[ActorRef]()
     var my_proximity_list = List[ActorRef]()
     
@@ -114,9 +118,12 @@ object Pastry3 {
         
       case `StartRouting` =>
         var rand = new Random()
-	    var key_int = rand.nextInt(num_nodes)
-	    var key_hash = hex_Digest(key_int.toString)
-	    self ! Route(key_hash, 0)
+        for (i <-0 until my_num_requests) {          
+	      var key_int = rand.nextInt(num_nodes)
+	      var key_string = key_int.toString
+	      var key_hash = hex_Digest(key_string)
+	      self ! Route(key_hash, 0)
+        }        
         
       case Route(key, hop) =>
         
