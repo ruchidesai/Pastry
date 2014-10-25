@@ -29,14 +29,19 @@ object Pastry3 {
   case class Route(key: String, hop: Int) extends Message
   case class Data(proximity_list: List[ActorRef], list: List[ActorRef]) extends Message
   case class GotIt(hop: Int) extends Message
+  case object InitializationDone extends Message
+  case object StartRouting extends Message
   
   class Master extends Actor {
     var hop = 0
+    var my_num_nodes = 0
+    var init_done_counter = 0
+    var actorList = List[ActorRef]()
     def receive = {
       case BuildNetwork(num_nodes) =>
+        my_num_nodes = num_nodes
         var seed = 1
-        var w = seed.toString
-        var actorList = List[ActorRef]()
+        var w = seed.toString        
         var counter = 0
 	
         //generating node ids
@@ -51,14 +56,14 @@ object Pastry3 {
 	    for(actor <- actorList) {
 	      actor ! Data(actorList, actorList.sorted)
 	    }
-	      
-	    //actorList.head ! Route(actorList.last.path.name, hop)
-	    //actorList.head ! Route(hex_Digest("ruchi"), hop)
-	    var rand = new Random()
-	    var key_int = rand.nextInt(num_nodes)
-	    var key_hash = hex_Digest(key_int.toString)
-	    println(key_int)
-	    actorList.head ! Route(hex_Digest(key_hash), hop)
+	    
+      case `InitializationDone` =>
+        init_done_counter += 1
+        if (init_done_counter >= my_num_nodes) {
+          for(actor <- actorList) {
+	        actor ! StartRouting
+	      }
+        }        
 	      
       case GotIt(h) =>
         println("No of hops = " + h)
@@ -96,6 +101,14 @@ object Pastry3 {
         initialize_routing_table()
         initialize_neighborhood_set()
         initialize_leaf_sets()
+        
+        context.actorSelection("../") ! InitializationDone        
+        
+      case `StartRouting` =>
+        var rand = new Random()
+	    var key_int = rand.nextInt(num_nodes)
+	    var key_hash = hex_Digest(key_int.toString)
+	    self ! Route(hex_Digest(key_hash), 0)
         
       case Route(key, hop) =>
         
