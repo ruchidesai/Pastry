@@ -122,6 +122,7 @@ object Pastry3 {
         for (i <-0 until my_num_requests) {          
 	      var key_int = rand.nextInt(num_nodes)
 	      var key_string = key_int.toString
+	      print() //if this is not added, program does not converge for certain values
 	      import context.dispatcher
 	      var key_hash = hex_Digest(key_string)
 	      context.system.scheduler.scheduleOnce(1000 milliseconds, self, Route(key_hash, 0))
