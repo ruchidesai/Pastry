@@ -5,6 +5,7 @@ import akka.actor._
 import com.typesafe.config._
 import scala.collection.mutable.ListBuffer
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Random
 
 object Pastry3 {
   
@@ -52,7 +53,12 @@ object Pastry3 {
 	    }
 	      
 	    //actorList.head ! Route(actorList.last.path.name, hop)
-	    actorList.head ! Route(hex_Digest("ruchi"), hop)
+	    //actorList.head ! Route(hex_Digest("ruchi"), hop)
+	    var rand = new Random()
+	    var key_int = rand.nextInt(num_nodes)
+	    var key_hash = hex_Digest(key_int.toString)
+	    println(key_int)
+	    actorList.head ! Route(hex_Digest(key_hash), hop)
 	      
       case GotIt(h) =>
         println("No of hops = " + h)
