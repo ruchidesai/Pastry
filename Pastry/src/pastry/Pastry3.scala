@@ -33,9 +33,10 @@ object Pastry3 {
   case object StartRouting extends Message
   
   class Master extends Actor {
-    var hop = 0
+    var total_hops = 0
     var my_num_nodes = 0
     var init_done_counter = 0
+    var request_counter = 0
     var actorList = List[ActorRef]()
     def receive = {
       case BuildNetwork(num_nodes) =>
@@ -66,9 +67,16 @@ object Pastry3 {
         }        
 	      
       case GotIt(h) =>
-        println("No of hops = " + h)
-        println("Shutting system down...")
-        context.system.shutdown
+        request_counter += 1
+        total_hops += h
+        if (request_counter >= my_num_nodes) {
+          var avg_hop = total_hops.toDouble/my_num_nodes
+          println("Total no of hops = " + total_hops)
+          println("Total no of requests = " + request_counter)
+          println("Average no of hops = " + avg_hop)
+          println("Shutting system down...")
+          context.system.shutdown
+        }        
     }
   }
   
@@ -108,13 +116,12 @@ object Pastry3 {
         var rand = new Random()
 	    var key_int = rand.nextInt(num_nodes)
 	    var key_hash = hex_Digest(key_int.toString)
-	    self ! Route(hex_Digest(key_hash), 0)
+	    self ! Route(key_hash, 0)
         
       case Route(key, hop) =>
         
         //if the current node happens to be the destination
         if(self.path.name == key) {
-          println("Message Received")
           context.actorSelection("../") ! GotIt(hop)
         }          
           
