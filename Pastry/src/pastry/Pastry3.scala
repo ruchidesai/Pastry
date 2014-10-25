@@ -6,6 +6,7 @@ import com.typesafe.config._
 import scala.collection.mutable.ListBuffer
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
+import scala.concurrent.duration._
 
 object Pastry3 {
   
@@ -121,8 +122,9 @@ object Pastry3 {
         for (i <-0 until my_num_requests) {          
 	      var key_int = rand.nextInt(num_nodes)
 	      var key_string = key_int.toString
+	      import context.dispatcher
 	      var key_hash = hex_Digest(key_string)
-	      self ! Route(key_hash, 0)
+	      context.system.scheduler.scheduleOnce(1000 milliseconds, self, Route(key_hash, 0))
         }        
         
       case Route(key, hop) =>
