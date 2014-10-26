@@ -11,8 +11,6 @@ import scala.util.control.Breaks._
 
 object Pastry4 {
   
-  private val sha = MessageDigest.getInstance("MD5")
-  
   def main(args: Array[String]){
     if ( args.isEmpty || args.length < 2) {
       println("usage: scala project2.scala <number of nodes> <number of requests>")
@@ -45,6 +43,7 @@ object Pastry4 {
     var my_num_nodes = 0
     var my_num_requests = 0
     var init_done_counter = 0
+    var join_complete_counter = 0
     var request_counter = 0
     var actorList = List[ActorRef]()
     def receive = {
@@ -63,20 +62,29 @@ object Pastry4 {
 	      counter +=1	
 	      w = seed.toString					  
 	    }
-        for(actor <- actorList.take(num_nodes - 1)) {
-	      actor ! Data(actorList, actorList.take(num_nodes - 1).sorted)
+        
+        for(actor <- actorList.take(32)) {
+	      actor ! Data(actorList, actorList.take(32).sorted)
 	    }
 	    
       case `InitializationDone` =>
         init_done_counter += 1
-        if (init_done_counter >= (my_num_nodes - 1)) {
-          actorList.last ! StartJoining(actorList)
+        if (init_done_counter >= 32) {
+          actorList(init_done_counter) ! StartJoining(actorList)
         }
+          
         
       case `JoinComplete` =>
-        for(actor <- actorList) {
+        join_complete_counter += 1
+        if(join_complete_counter >= (my_num_nodes - 32)) {
+          for(actor <- actorList) {
 	        actor ! StartRouting
 	      }
+        }
+        else {
+          init_done_counter += 1
+          actorList(init_done_counter) ! StartJoining(actorList)
+        }
 	      
       case GotIt(h) =>
         request_counter += 1
@@ -159,10 +167,23 @@ object Pastry4 {
         else {          
           
           var rt = routing_table
-          rt(hop) = my_routing_table(hop)
+          var new_hop = hop
+          if(hop == 0)
+          {
+            var l = ((key).zip(my_node_id).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
+            for (i <- 0 to l) {
+              rt(i) = my_routing_table(i)
+              new_hop += 1
+            }            
+          }
+          else {
+            var l = ((key).zip(my_node_id).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
+            rt(l) = my_routing_table(l)
+            new_hop += 1
+          }            
         
           //check if current node lies in the smaller leaf set
-          if(in_my_smaller_leaf_set(key)) {
+          if(in_my_smaller_leaf_set(key)) {            
             var max_common_prefix_length = ((key).zip(my_node_id).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
             var cpl_map = scala.collection.mutable.Map[ActorRef, Int]()
             cpl_map += self -> max_common_prefix_length
@@ -184,16 +205,16 @@ object Pastry4 {
             if (destination == self) {
               var X = my_proximity_list(my_proximity_list.indexWhere(p => p.path.name == key))
               var lnode_list = self::node_list
-              X ! JoinRqstRoute(key, self, my_smaller_leaf_set, my_larger_leaf_set, rt, lnode_list, (hop + 1))
+              X ! JoinRqstRoute(key, self, my_smaller_leaf_set, my_larger_leaf_set, rt, lnode_list, new_hop)
             }
             else {
               var lnode_list = self::node_list
-              destination ! JoinRqstRoute(key, z, smaller_leaf_set, larger_leaf_set, rt, lnode_list, (hop + 1))
+              destination ! JoinRqstRoute(key, z, smaller_leaf_set, larger_leaf_set, rt, lnode_list, new_hop)
             }              
           }
         
           //check if current node lies in the larger leaf set
-          else if(in_my_larger_leaf_set(key)) {
+          else if(in_my_larger_leaf_set(key)) {            
             var max_common_prefix_length = ((key).zip(my_node_id).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
             var cpl_map = scala.collection.mutable.Map[ActorRef, Int]()
             cpl_map += self -> max_common_prefix_length
@@ -215,21 +236,21 @@ object Pastry4 {
             if (destination == self) {
               var X = my_proximity_list(my_proximity_list.indexWhere(p => p.path.name == key))
               var lnode_list = self::node_list
-              X ! JoinRqstRoute(key, self, my_smaller_leaf_set, my_larger_leaf_set, rt, lnode_list, (hop + 1))
+              X ! JoinRqstRoute(key, self, my_smaller_leaf_set, my_larger_leaf_set, rt, lnode_list, new_hop)
             }
             else {
               var lnode_list = self::node_list
-              destination ! JoinRqstRoute(key, z, smaller_leaf_set, larger_leaf_set, rt, lnode_list, (hop + 1))
+              destination ! JoinRqstRoute(key, z, smaller_leaf_set, larger_leaf_set, rt, lnode_list, new_hop)
             }                  
           }
         
           //check in routing table
-          else {
+          else {            
             var row = ((key).zip(my_node_id).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length
             var col = column_of(row, key)
             if(my_routing_table(row)(col) != null) {
               var lnode_list = self::node_list
-              my_routing_table(row)(col) ! JoinRqstRoute(key, z, smaller_leaf_set, larger_leaf_set, rt, lnode_list, (hop + 1))
+              my_routing_table(row)(col) ! JoinRqstRoute(key, z, smaller_leaf_set, larger_leaf_set, rt, lnode_list, new_hop)
             }
             else {
               //rare case - check in neighborhood set
@@ -253,7 +274,7 @@ object Pastry4 {
               
               var X = my_proximity_list(my_proximity_list.indexWhere(p => p.path.name == key))
               var lnode_list = self::node_list
-              X ! JoinRqstRoute(key, self, my_smaller_leaf_set, my_larger_leaf_set, rt, lnode_list, (hop + 1))
+              X ! JoinRqstRoute(key, self, my_smaller_leaf_set, my_larger_leaf_set, rt, lnode_list, new_hop)
                 
             }
           }
@@ -271,9 +292,9 @@ object Pastry4 {
       case `StartRouting` =>
         var rand = new Random()
         for (i <-0 until my_num_requests) {          
-	      var key_int = rand.nextInt(num_nodes)
+	      var key_int = rand.nextInt(my_num_nodes).abs
 	      var key_string = key_int.toString
-	      print(" ") //if this is not added, program does not converge for certain values
+	      //if this is not added, program does not converge for certain values
 	      import context.dispatcher
 	      var key_hash = hex_Digest(key_string)
 	      context.system.scheduler.scheduleOnce(1000 milliseconds, self, Route(key_hash, 0))
@@ -397,7 +418,7 @@ object Pastry4 {
     }
     
     def initialize_neighborhood_set() {
-      var index = my_proximity_list.indexOf(self)      
+      var index = my_proximity_list.indexOf(self)
       var i = 0
       while (i < 16) {
         index -= 1
@@ -409,10 +430,11 @@ object Pastry4 {
       }
       i = 0
       index = my_proximity_list.indexOf(self)
+      
       while (i < 16) {
         index += 1
         if (index >= my_num_nodes)
-          index %= my_num_nodes
+          index %= my_num_nodes        
         my_neighborhood_set += my_proximity_list(index)                
         i += 1
       }      
@@ -424,7 +446,7 @@ object Pastry4 {
       while (i < 8) {
         index -= 1
         if (index < 0)
-          index += (my_num_nodes - 1)
+          index += 32
         my_smaller_leaf_set += my_list(index)        
         i += 1
       }
@@ -432,8 +454,8 @@ object Pastry4 {
       index = my_list.indexOf(self)
       while (i < 8) {
         index += 1
-        if (index >= (my_num_nodes - 1))
-          index %= (my_num_nodes - 1)
+        if (index >= 32)
+          index %= 32
         my_larger_leaf_set += my_list(index)                
         i += 1
       }
@@ -481,7 +503,7 @@ object Pastry4 {
     }
     
     def update_data(key: String) {
-      var key_index = my_proximity_list.indexOf(key)
+      var key_index = my_proximity_list.indexWhere(p => p.path.name == key)
       //update smaller leaf set
       if (key >= my_smaller_leaf_set.head.path.name && key <= my_smaller_leaf_set.last.path.name) {
         var diff1 = (my_node_id.compare(key)).abs
@@ -531,6 +553,7 @@ object Pastry4 {
   
   //generates sha-1 hash
   def hex_Digest(s:String):String = {
+    val sha = MessageDigest.getInstance("MD5")
 	sha.digest(s.getBytes("UTF-8")).map("%02x".format(_)).mkString
   }
   
