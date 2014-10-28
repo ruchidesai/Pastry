@@ -63,6 +63,8 @@ object Pastry4 {
 	      w = seed.toString					  
 	    }
         
+        println("Initializing...")
+        
         for(actor <- actorList.take(32)) {
 	      actor ! Data(actorList, actorList.take(32).sorted)
 	    }
@@ -70,6 +72,7 @@ object Pastry4 {
       case `InitializationDone` =>
         init_done_counter += 1
         if (init_done_counter >= 32) {
+          println("Nodes have started joining")
           actorList(init_done_counter) ! StartJoining(actorList)
         }
           
@@ -77,6 +80,7 @@ object Pastry4 {
       case `JoinComplete` =>
         join_complete_counter += 1
         if(join_complete_counter >= (my_num_nodes - 32)) {
+          println("Join process completed. Begin Routing")
           for(actor <- actorList) {
 	        actor ! StartRouting
 	      }
@@ -90,6 +94,7 @@ object Pastry4 {
         request_counter += 1
         total_hops += h
         if (request_counter >= (my_num_nodes * my_num_requests)) {
+          println("Routing complete")
           var avg_hop = total_hops.toDouble / (my_num_nodes * my_num_requests)
           println("Total no of hops = " + total_hops)
           println("Total no of requests = " + request_counter)
