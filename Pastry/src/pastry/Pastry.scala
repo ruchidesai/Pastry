@@ -26,7 +26,7 @@ object Pastry {
   sealed trait Message
   case class BuildNetwork(num_nodes: Int) extends Message
   case class Route(key: String, hop: Int) extends Message
-  case class Data(hashmap: Map[ActorRef, Int], list: List[ActorRef]) extends Message
+  case class Data(proximity_list: List[ActorRef], list: List[ActorRef]) extends Message
   case object GotIt extends Message
   
   class Master extends Actor {
@@ -46,14 +46,15 @@ object Pastry {
 	      counter +=1	
 	      w = seed.toString					  
 	    }
-	
-	    //array index serves as proximity metric
-	    val hashmap = (actorList.toArray).view.zipWithIndex.toMap
+        
 	    for(actor <- actorList)
-	      actor ! Data(hashmap, actorList.sorted)
+	      //actor ! Data(hashmap, actorList.sorted)
+	      actor ! Data(actorList, actorList.sorted)
 	    actorList.head ! Route(actorList.last.path.name, hop)
 	      
       case `GotIt` =>
+	    //case GotIt(hop) =>
+        //println("No of hops = " + hop)
         println("Shutting system down...")
         context.system.shutdown
     }
@@ -61,22 +62,28 @@ object Pastry {
   
   class PastryNode(num_nodes: Int) extends Actor {
     
-    val node_id = self.path.name
+    val node_id = self.path.name    
     
-    var my_hashmap = Map[ActorRef, Int]()
+    //var my_hashmap = Map[ActorRef, Int]()
     var my_num_nodes = num_nodes
     var my_list = List[ActorRef]()
+    var my_proximity_list = List[ActorRef]()
     
-    var my_smaller_leaf_set = List[ActorRef]()
-    var my_larger_leaf_set = List[ActorRef]()
-    var my_neighborhood_set = List[ActorRef]()
-    var my_routing_table = Array.ofDim[ListBuffer[ActorRef]](4)
+    //val r_t_row = (scala.math.log(my_num_nodes)/scala.math.log(16)).ceil.toInt
+    val r_t_row = 31
+    
+    var my_smaller_leaf_set = ListBuffer[ActorRef]()
+    var my_larger_leaf_set = ListBuffer[ActorRef]()
+    var my_neighborhood_set = ListBuffer[ActorRef]()
+    var my_routing_table = Array.ofDim[ListBuffer[ActorRef]](r_t_row)
     
     def receive = {
       
-      case Data(hashmap, list) =>
+      case Data(proximity_list, list) =>
         
-        my_hashmap = hashmap
+        //my_hashmap = hashmap
+        
+        my_proximity_list = proximity_list
         my_num_nodes = num_nodes
         my_list = list
         
@@ -139,7 +146,6 @@ object Pastry {
             var T_list = union_list.filter(n => (((key).zip(n.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString).length >= row))
             var destination = self
             var min_difference = (key.compare(self.path.name)).abs
-            println(min_difference)
             if (T_list.length > 0) {             
               for(T <- T_list) {
                 if (key.compare(T.path.name) < min_difference) {
@@ -158,33 +164,75 @@ object Pastry {
                 }
               }
             }
-            destination ! Route(key, (hop + 1))
+            if (destination.path.name == self.path.name) {
+              println("Message Received")
+              context.actorSelection("../") ! GotIt
+            }
+            else
+              destination ! Route(key, (hop + 1))
           }
         }
     }
     
     def initialize_routing_table() {
-      var my_index = my_list.indexOf(self)
+      var index = my_list.indexOf(self)
       for (i <- 0 until my_routing_table.length)
         my_routing_table(i) = ListBuffer[ActorRef]()
-      for (i <- (my_index + 1) until my_list.length) {
-        var node = my_list(i)
-        var common_prefix = (node.path.name).zip(self.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString
-        if (my_routing_table(common_prefix.length).length < 15)
-          my_routing_table(common_prefix.length) += node
+      var i = 0
+      while (i < my_list.length) {
+        index += 1
+        if (index >= my_list.length)
+          index %= my_list.length
+        var node = my_list(index)
+        if (node != self) {
+          var common_prefix = (node.path.name).zip(self.path.name).takeWhile(Function.tupled(_ == _)).map(_._1).mkString
+          if (my_routing_table(common_prefix.length).length < 15)
+            my_routing_table(common_prefix.length) += node
+        }        
+        i += 1
       }
     }
     
     def initialize_neighborhood_set() {
-      var index = my_hashmap(self)
-      my_neighborhood_set = ((my_hashmap.filterKeys(n => ((my_hashmap(n) <= ((index + 16) % my_num_nodes)) && (my_hashmap(n) > (index % my_num_nodes))) || ((my_hashmap(n) >= ((index - 16) % my_num_nodes)) && (my_hashmap(n) < (index % my_num_nodes))))).keys).toList
+      var index = my_proximity_list.indexOf(self)      
+      var i = 0
+      while (i < 16) {
+        index += 1
+        if (index >= my_num_nodes)
+          index %= my_num_nodes
+        my_neighborhood_set += my_proximity_list(index)                
+        i += 1
+      } 
+      i = 0
+      index = my_proximity_list.indexOf(self)
+      while (i < 16) {
+        index -= 1
+        if (index < 0)
+          index += my_num_nodes
+        my_neighborhood_set += my_proximity_list(index)        
+        i += 1
+      }
     }
     
     def initialize_leaf_sets() {
       var index = my_list.indexOf(self)
-      //my_smaller_leaf_set = my_list.filter(n => (((my_list.indexOf(n) % my_num_nodes) >= ((index - 8) % my_num_nodes)) && ((my_list.indexOf(n) % my_num_nodes) < (index % my_num_nodes))))
-      my_smaller_leaf_set = my_list.filter(n =>(((my_list.indexOf(n) > index) && (my_list.indexOf(n) >= (index - 8 + my_num_nodes))) || ((my_list.indexOf(n) < index) && (my_list.indexOf(n) >= (index - 8)))))
-      my_larger_leaf_set = my_list.filter(n => (((my_list.indexOf(n) > index) && (my_list.indexOf(n) <= (index + 8))) || ((my_list.indexOf(n) < index) && ((my_list.indexOf(n) + my_num_nodes) <= (index + 8)))))
+      var i = 0
+      while (i < 8) {
+        index -= 1
+        if (index < 0)
+          index += my_num_nodes
+        my_smaller_leaf_set += my_list(index)        
+        i += 1
+      }
+      i = 0
+      index = my_list.indexOf(self)
+      while (i < 8) {
+        index += 1
+        if (index >= my_num_nodes)
+          index %= my_num_nodes
+        my_larger_leaf_set += my_list(index)                
+        i += 1
+      }
     }
     
     def in_my_smaller_leaf_set(key: String): Boolean = {
